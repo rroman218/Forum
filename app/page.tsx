@@ -10,8 +10,7 @@ export default async function HomePage() {
             StudentQ&A
           </h1>
 
-          <form
-          >
+          <form>
             <button className="rounded-lg border border-[#e0e6ef] bg-white px-4 py-2 text-sm hover:bg-gray-50">
               Вийти
             </button>
