@@ -17,6 +17,15 @@ export default function LoginForm() {
 
     async function handleSubmit(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
+        setError("");
+
+        try {
+            setLoading(true);
+        } catch {
+            setError("Failed to log in!")
+        } finally {
+            setLoading(false)
+        }
     }
 
     return (
