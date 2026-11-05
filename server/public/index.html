@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <title>StudentQ&A</title>
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 16px; }
+    .question { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
+    .tag { background: #e8f0fe; color: #1a56db; padding: 2px 8px; border-radius: 4px; margin-right: 4px; font-size: 13px; }
+    .meta { color: #666; font-size: 14px; }
+    input { width: 100%; padding: 8px; margin-bottom: 8px; box-sizing: border-box; }
+    button { padding: 8px 16px; cursor: pointer; }
+    .error { color: red; }
+  </style>
+</head>
+<body>
+  <h1>StudentQ&A</h1>
+
+  <form id="form">
+    <input id="title" placeholder="Заголовок запитання">
+    <input id="author" placeholder="Ваше ім'я">
+    <input id="tags" placeholder="Теги через кому: Python, SQL">
+    <button type="submit">Опублікувати</button>
+    <p id="error" class="error"></p>
+  </form>
+
+  <div id="list">Завантаження...</div>
+
+  <script>
+    function loadQuestions() {
+      fetch('/api/questions')
+        .then(res => res.json())
+        .then(questions => {
+          document.getElementById('list').innerHTML = questions.map(q => `
+            <div class="question">
+              <h3>${q.title}</h3>
+              <div>${q.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>
+              <p class="meta">Автор: ${q.author} · Рейтинг: ${q.score}</p>
+            </div>
+          `).join('');
+        });
+    }
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const res = await fetch('/api/questions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: document.getElementById('title').value,
+          author: document.getElementById('author').value,
+          tags: document.getElementById('tags').value,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById('error').textContent = data.error;
+        return;
+      }
+      document.getElementById('error').textContent = '';
+      document.getElementById('form').reset();
+      loadQuestions();
+    });
+
+    loadQuestions();
+  </script>
+</body>
+</html>
