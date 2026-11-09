@@ -4,6 +4,8 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const pool = require('./db');
+const { moderateAndSave, aiLimiter } = require('./ai/moderation');
+const aiRoutes = require('./ai/moderationRoutes');
 
 const app = express();
 const PORT = 4000;
@@ -30,6 +32,10 @@ function requireAuth(req, res, next) {
   }
 }
 
+// ---------- AI-МОДЕРАЦІЯ (маршрути) ----------
+
+app.use('/api', aiRoutes(requireAuth));
+
 // ---------- ЗАПИТАННЯ ----------
 
 const QUESTION_SELECT = `
@@ -39,7 +45,9 @@ const QUESTION_SELECT = `
 `;
 
 app.get('/api/questions', async (req, res) => {
-  const result = await pool.query(QUESTION_SELECT + ' ORDER BY q.created_at DESC');
+  const result = await pool.query(
+    QUESTION_SELECT + " WHERE q.moderation_status = 'approved' ORDER BY q.created_at DESC"
+  );
   res.json(result.rows);
 });
 
@@ -63,7 +71,7 @@ function parseTags(tags) {
   return [];
 }
 
-app.post('/api/questions', requireAuth, async (req, res) => {
+app.post('/api/questions', requireAuth, aiLimiter, async (req, res) => {
   const error = validateQuestion(req.body);
   if (error) return res.status(400).json({ error });
 
@@ -74,10 +82,15 @@ app.post('/api/questions', requireAuth, async (req, res) => {
      VALUES ($1, $2, $3, $4, $5) RETURNING *`,
     [title.trim(), body.trim(), discipline.trim(), req.userId, parseTags(tags)]
   );
-  res.status(201).json(result.rows[0]);
+
+  const question = result.rows[0];
+  // AI-модерація запускається у фоні, користувач не чекає
+  moderateAndSave(req.userId, 'question', question.id, `${question.title}\n\n${question.body}`)
+    .catch(err => console.error(err));
+  res.status(201).json(question);
 });
 
-app.put('/api/questions/:id', requireAuth, async (req, res) => {
+app.put('/api/questions/:id', requireAuth, aiLimiter, async (req, res) => {
   const found = await pool.query('SELECT * FROM questions WHERE id = $1', [req.params.id]);
   const old = found.rows[0];
 
@@ -98,11 +111,16 @@ app.put('/api/questions/:id', requireAuth, async (req, res) => {
 
   const result = await pool.query(
     `UPDATE questions
-     SET title = $1, body = $2, discipline = $3, tags = $4, updated_at = now()
+     SET title = $1, body = $2, discipline = $3, tags = $4,
+         moderation_status = 'pending', updated_at = now()
      WHERE id = $5 RETURNING *`,
     [updated.title.trim(), updated.body.trim(), updated.discipline.trim(), tags, old.id]
   );
-  res.json(result.rows[0]);
+
+  const q = result.rows[0];
+  moderateAndSave(req.userId, 'question', q.id, `${q.title}\n\n${q.body}`)
+    .catch(err => console.error(err));
+  res.json(q);
 });
 
 app.delete('/api/questions/:id', requireAuth, async (req, res) => {
