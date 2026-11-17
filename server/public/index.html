@@ -1,67 +1,150 @@
-<!DOCTYPE html>
+ʼ<!DOCTYPE html>
 <html lang="uk">
 <head>
   <meta charset="UTF-8">
   <title>StudentQ&A</title>
   <style>
     body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 16px; }
-    .question { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
+    .box { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .question { border-top: 1px solid #eee; padding: 12px 0; }
     .tag { background: #e8f0fe; color: #1a56db; padding: 2px 8px; border-radius: 4px; margin-right: 4px; font-size: 13px; }
     .meta { color: #666; font-size: 14px; }
-    input { width: 100%; padding: 8px; margin-bottom: 8px; box-sizing: border-box; }
-    button { padding: 8px 16px; cursor: pointer; }
+    input, textarea { width: 100%; padding: 8px; margin-bottom: 8px; box-sizing: border-box; font: inherit; }
+    button { padding: 8px 16px; cursor: pointer; margin-right: 6px; }
     .error { color: red; }
   </style>
 </head>
 <body>
   <h1>StudentQ&A</h1>
 
-  <form id="form">
-    <input id="title" placeholder="Заголовок запитання">
-    <input id="author" placeholder="Ваше ім'я">
-    <input id="tags" placeholder="Теги через кому: Python, SQL">
-    <button type="submit">Опублікувати</button>
-    <p id="error" class="error"></p>
-  </form>
+  <!-- ВХІД / РЕЄСТРАЦІЯ -->
+  <div class="box" id="authBox">
+    <input id="name" placeholder="Ім'я (тільки для реєстрації)">
+    <input id="email" placeholder="Email" value="taras@test.com">
+    <input id="password" type="password" placeholder="Пароль" value="password123">
+    <button onclick="login()">Увійти</button>
+    <button onclick="register()">Зареєструватися</button>
+    <p id="authError" class="error"></p>
+  </div>
 
+  <div class="box" id="userBox" style="display:none">
+    Ви увійшли як <b id="userName"></b>
+    <button onclick="logout()">Вийти</button>
+  </div>
+
+  <!-- НОВЕ ЗАПИТАННЯ -->
+  <div class="box" id="questionBox" style="display:none">
+    <b>Нове запитання</b>
+    <input id="title" placeholder="Заголовок (від 10 символів)">
+    <textarea id="body" rows="3" placeholder="Текст запитання (від 20 символів)"></textarea>
+    <input id="discipline" placeholder="Дисципліна, напр. Програмування">
+    <input id="tags" placeholder="Теги через кому: Python, SQL">
+    <button onclick="createQuestion()">Опублікувати</button>
+    <p id="qError" class="error"></p>
+  </div>
+
+  <!-- СПИСОК -->
   <div id="list">Завантаження...</div>
 
   <script>
-    function loadQuestions() {
-      fetch('/api/questions')
-        .then(res => res.json())
-        .then(questions => {
-          document.getElementById('list').innerHTML = questions.map(q => `
-            <div class="question">
-              <h3>${q.title}</h3>
-              <div>${q.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>
-              <p class="meta">Автор: ${q.author} · Рейтинг: ${q.score}</p>
-            </div>
-          `).join('');
-        });
+    let token = localStorage.getItem('token');
+    let user = JSON.parse(localStorage.getItem('user') || 'null');
+
+    async function api(method, url, body) {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: 'Bearer ' + token } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = res.status === 204 ? null : await res.json();
+      if (!res.ok) throw new Error(data.error);
+      return data;
     }
 
-    document.getElementById('form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const res = await fetch('/api/questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: document.getElementById('title').value,
-          author: document.getElementById('author').value,
-          tags: document.getElementById('tags').value,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        document.getElementById('error').textContent = data.error;
-        return;
-      }
-      document.getElementById('error').textContent = '';
-      document.getElementById('form').reset();
-      loadQuestions();
-    });
+    function showUser() {
+      document.getElementById('authBox').style.display = user ? 'none' : 'block';
+      document.getElementById('userBox').style.display = user ? 'block' : 'none';
+      document.getElementById('questionBox').style.display = user ? 'block' : 'none';
+      if (user) document.getElementById('userName').textContent = user.name;
+    }
 
+    async function login() {
+      try {
+        const data = await api('POST', '/api/auth/login', {
+          email: document.getElementById('email').value,
+          password: document.getElementById('password').value,
+        });
+        token = data.token;
+        user = data.user;
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(user));
+        document.getElementById('authError').textContent = '';
+        showUser();
+        loadQuestions();
+      } catch (e) {
+        document.getElementById('authError').textContent = e.message;
+      }
+    }
+
+    async function register() {
+      try {
+        await api('POST', '/api/auth/register', {
+          name: document.getElementById('name').value,
+          email: document.getElementById('email').value,
+          password: document.getElementById('password').value,
+        });
+        await login();
+      } catch (e) {
+        document.getElementById('authError').textContent = e.message;
+      }
+    }
+
+    function logout() {
+      token = null;
+      user = null;
+      localStorage.clear();
+      showUser();
+      loadQuestions();
+    }
+
+    async function createQuestion() {
+      try {
+        await api('POST', '/api/questions', {
+          title: document.getElementById('title').value,
+          body: document.getElementById('body').value,
+          discipline: document.getElementById('discipline').value,
+          tags: document.getElementById('tags').value,
+        });
+        ['title', 'body', 'discipline', 'tags'].forEach(id => document.getElementById(id).value = '');
+        document.getElementById('qError').textContent = '';
+        loadQuestions();
+      } catch (e) {
+        document.getElementById('qError').textContent = e.message;
+      }
+    }
+
+    async function deleteQuestion(id) {
+      await api('DELETE', '/api/questions/' + id);
+      loadQuestions();
+    }
+
+    async function loadQuestions() {
+      const questions = await api('GET', '/api/questions');
+      document.getElementById('list').innerHTML = questions.map(q => `
+        <div class="question">
+          <h3>${q.title}</h3>
+          <p>${q.body}</p>
+          <div>${q.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>
+          <p class="meta">${q.author_name} · ${q.discipline} · Рейтинг: ${q.score}</p>
+          ${user && user.id === q.author_id ? `<button onclick="deleteQuestion(${q.id})">Видалити</button>` : ''}
+        </div>
+      `).join('');
+    }
+
+    showUser();
     loadQuestions();
   </script>
 </body>

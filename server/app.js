@@ -12,8 +12,6 @@ app.use(cors({ origin: 'http://localhost:3000' }));
 app.use(express.json());
 app.use(express.static('public'));
 
-// ---------- ПЕРЕВІРКА ТОКЕНА ----------
-
 function requireAuth(req, res, next) {
   const header = req.headers.authorization;
 
@@ -30,25 +28,12 @@ function requireAuth(req, res, next) {
   }
 }
 
-// ---------- ЗАПИТАННЯ ----------
-
 const QUESTION_SELECT = `
-  SELECT q.*, u.name AS author_name
+  SELECT q.*, u.name AS author_name,
+         (SELECT COUNT(*)::int FROM answers a WHERE a.question_id = q.id) AS answers_count
   FROM questions q
   JOIN users u ON u.id = q.author_id
 `;
-
-app.get('/api/questions', async (req, res) => {
-  const result = await pool.query(QUESTION_SELECT + ' ORDER BY q.created_at DESC');
-  res.json(result.rows);
-});
-
-app.get('/api/questions/:id', async (req, res) => {
-  const result = await pool.query(QUESTION_SELECT + ' WHERE q.id = $1', [req.params.id]);
-  const question = result.rows[0];
-  if (!question) return res.status(404).json({ error: 'Запитання не знайдено' });
-  res.json(question);
-});
 
 function validateQuestion({ title, body, discipline }) {
   if (!title || title.trim().length < 10) return 'Заголовок має бути не менше 10 символів';
@@ -62,6 +47,28 @@ function parseTags(tags) {
   if (typeof tags === 'string') return tags.split(',').map(t => t.trim()).filter(t => t);
   return [];
 }
+
+app.get('/api/questions', async (req, res) => {
+  const result = await pool.query(QUESTION_SELECT + ' ORDER BY q.created_at DESC');
+  res.json(result.rows);
+});
+
+app.get('/api/questions/:id', async (req, res) => {
+  const result = await pool.query(QUESTION_SELECT + ' WHERE q.id = $1', [req.params.id]);
+  const question = result.rows[0];
+  if (!question) return res.status(404).json({ error: 'Запитання не знайдено' });
+
+  const answers = await pool.query(
+    `SELECT a.*, u.name AS author_name
+     FROM answers a
+     JOIN users u ON u.id = a.author_id
+     WHERE a.question_id = $1
+     ORDER BY a.is_accepted DESC, a.created_at ASC`,
+    [question.id]
+  );
+
+  res.json({ ...question, answers: answers.rows });
+});
 
 app.post('/api/questions', requireAuth, async (req, res) => {
   const error = validateQuestion(req.body);
@@ -118,7 +125,56 @@ app.delete('/api/questions/:id', requireAuth, async (req, res) => {
   res.status(204).end();
 });
 
-// ---------- РЕЄСТРАЦІЯ ----------
+app.post('/api/questions/:id/answers', requireAuth, async (req, res) => {
+  const { body } = req.body;
+  if (!body || body.trim().length < 10) {
+    return res.status(400).json({ error: 'Відповідь має бути не менше 10 символів' });
+  }
+
+  const q = await pool.query('SELECT id FROM questions WHERE id = $1', [req.params.id]);
+  if (!q.rows[0]) return res.status(404).json({ error: 'Запитання не знайдено' });
+
+  const result = await pool.query(
+    `INSERT INTO answers (body, question_id, author_id)
+     VALUES ($1, $2, $3) RETURNING *`,
+    [body.trim(), req.params.id, req.userId]
+  );
+  res.status(201).json(result.rows[0]);
+});
+
+app.put('/api/answers/:id', requireAuth, async (req, res) => {
+  const found = await pool.query('SELECT * FROM answers WHERE id = $1', [req.params.id]);
+  const answer = found.rows[0];
+
+  if (!answer) return res.status(404).json({ error: 'Відповідь не знайдено' });
+  if (answer.author_id !== req.userId) {
+    return res.status(403).json({ error: 'Редагувати можна лише власні відповіді' });
+  }
+
+  const { body } = req.body;
+  if (!body || body.trim().length < 10) {
+    return res.status(400).json({ error: 'Відповідь має бути не менше 10 символів' });
+  }
+
+  const result = await pool.query(
+    'UPDATE answers SET body = $1, updated_at = now() WHERE id = $2 RETURNING *',
+    [body.trim(), answer.id]
+  );
+  res.json(result.rows[0]);
+});
+
+app.delete('/api/answers/:id', requireAuth, async (req, res) => {
+  const found = await pool.query('SELECT author_id FROM answers WHERE id = $1', [req.params.id]);
+  const answer = found.rows[0];
+
+  if (!answer) return res.status(404).json({ error: 'Відповідь не знайдено' });
+  if (answer.author_id !== req.userId) {
+    return res.status(403).json({ error: 'Видаляти можна лише власні відповіді' });
+  }
+
+  await pool.query('DELETE FROM answers WHERE id = $1', [req.params.id]);
+  res.status(204).end();
+});
 
 app.post('/api/auth/register', async (req, res) => {
   const { name, email, password } = req.body;
@@ -149,8 +205,6 @@ app.post('/api/auth/register', async (req, res) => {
 
   res.status(201).json(result.rows[0]);
 });
-
-// ---------- ВХІД ----------
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
