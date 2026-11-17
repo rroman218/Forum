@@ -49,7 +49,45 @@ function parseTags(tags) {
 }
 
 app.get('/api/questions', async (req, res) => {
-  const result = await pool.query(QUESTION_SELECT + ' ORDER BY q.created_at DESC');
+  const { search, discipline, tag } = req.query;
+  const conditions = [];
+  const params = [];
+
+  if (search) {
+    params.push(`%${search}%`);
+    conditions.push(`(q.title ILIKE $${params.length} OR q.body ILIKE $${params.length})`);
+  }
+  if (discipline) {
+    params.push(discipline);
+    conditions.push(`q.discipline = $${params.length}`);
+  }
+  if (tag) {
+    params.push(tag);
+    conditions.push(`$${params.length} = ANY(q.tags)`);
+  }
+
+  const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+  const result = await pool.query(QUESTION_SELECT + where + ' ORDER BY q.created_at DESC', params);
+  res.json(result.rows);
+});
+
+app.get('/api/tags', async (req, res) => {
+  const result = await pool.query(
+    `SELECT tag, COUNT(*)::int AS count
+     FROM questions, unnest(tags) AS tag
+     GROUP BY tag
+     ORDER BY count DESC, tag`
+  );
+  res.json(result.rows);
+});
+
+app.get('/api/disciplines', async (req, res) => {
+  const result = await pool.query(
+    `SELECT discipline, COUNT(*)::int AS count
+     FROM questions
+     GROUP BY discipline
+     ORDER BY discipline`
+  );
   res.json(result.rows);
 });
 
@@ -68,38 +106,6 @@ app.get('/api/questions/:id', async (req, res) => {
   );
 
   res.json({ ...question, answers: answers.rows });
-});
-
-app.post('/api/answers/:id/accept', requireAuth, async (req, res) => {
-  const found = await pool.query(
-    `SELECT a.id, a.question_id, a.is_accepted, q.author_id AS question_author
-     FROM answers a
-     JOIN questions q ON q.id = a.question_id
-     WHERE a.id = $1`,
-    [req.params.id]
-  );
-  const answer = found.rows[0];
-
-  if (!answer) return res.status(404).json({ error: 'Відповідь не знайдено' });
-  if (answer.question_author !== req.userId) {
-    return res.status(403).json({ error: 'Позначати найкращу відповідь може лише автор запитання' });
-  }
-
-  if (answer.is_accepted) {
-    const result = await pool.query(
-      'UPDATE answers SET is_accepted = false WHERE id = $1 RETURNING *',
-      [answer.id]
-    );
-    return res.json(result.rows[0]);
-  }
-
-  await pool.query('UPDATE answers SET is_accepted = false WHERE question_id = $1', [answer.question_id]);
-
-  const result = await pool.query(
-    'UPDATE answers SET is_accepted = true WHERE id = $1 RETURNING *',
-    [answer.id]
-  );
-  res.json(result.rows[0]);
 });
 
 app.post('/api/questions', requireAuth, async (req, res) => {
@@ -206,6 +212,38 @@ app.delete('/api/answers/:id', requireAuth, async (req, res) => {
 
   await pool.query('DELETE FROM answers WHERE id = $1', [req.params.id]);
   res.status(204).end();
+});
+
+app.post('/api/answers/:id/accept', requireAuth, async (req, res) => {
+  const found = await pool.query(
+    `SELECT a.id, a.question_id, a.is_accepted, q.author_id AS question_author
+     FROM answers a
+     JOIN questions q ON q.id = a.question_id
+     WHERE a.id = $1`,
+    [req.params.id]
+  );
+  const answer = found.rows[0];
+
+  if (!answer) return res.status(404).json({ error: 'Відповідь не знайдено' });
+  if (answer.question_author !== req.userId) {
+    return res.status(403).json({ error: 'Позначати найкращу відповідь може лише автор запитання' });
+  }
+
+  if (answer.is_accepted) {
+    const result = await pool.query(
+      'UPDATE answers SET is_accepted = false WHERE id = $1 RETURNING *',
+      [answer.id]
+    );
+    return res.json(result.rows[0]);
+  }
+
+  await pool.query('UPDATE answers SET is_accepted = false WHERE question_id = $1', [answer.question_id]);
+
+  const result = await pool.query(
+    'UPDATE answers SET is_accepted = true WHERE id = $1 RETURNING *',
+    [answer.id]
+  );
+  res.json(result.rows[0]);
 });
 
 app.post('/api/auth/register', async (req, res) => {
