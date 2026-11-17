@@ -70,6 +70,38 @@ app.get('/api/questions/:id', async (req, res) => {
   res.json({ ...question, answers: answers.rows });
 });
 
+app.post('/api/answers/:id/accept', requireAuth, async (req, res) => {
+  const found = await pool.query(
+    `SELECT a.id, a.question_id, a.is_accepted, q.author_id AS question_author
+     FROM answers a
+     JOIN questions q ON q.id = a.question_id
+     WHERE a.id = $1`,
+    [req.params.id]
+  );
+  const answer = found.rows[0];
+
+  if (!answer) return res.status(404).json({ error: 'Відповідь не знайдено' });
+  if (answer.question_author !== req.userId) {
+    return res.status(403).json({ error: 'Позначати найкращу відповідь може лише автор запитання' });
+  }
+
+  if (answer.is_accepted) {
+    const result = await pool.query(
+      'UPDATE answers SET is_accepted = false WHERE id = $1 RETURNING *',
+      [answer.id]
+    );
+    return res.json(result.rows[0]);
+  }
+
+  await pool.query('UPDATE answers SET is_accepted = false WHERE question_id = $1', [answer.question_id]);
+
+  const result = await pool.query(
+    'UPDATE answers SET is_accepted = true WHERE id = $1 RETURNING *',
+    [answer.id]
+  );
+  res.json(result.rows[0]);
+});
+
 app.post('/api/questions', requireAuth, async (req, res) => {
   const error = validateQuestion(req.body);
   if (error) return res.status(400).json({ error });
