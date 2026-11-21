@@ -1,10 +1,11 @@
 const express = require('express');
 const pool = require('../db');
 const requireAuth = require('../middleware/auth');
+const { moderateAndSave, aiLimiter } = require('../ai/moderation');
 
 const router = express.Router();
 
-router.post('/questions/:id/answers', requireAuth, async (req, res) => {
+router.post('/questions/:id/answers', requireAuth, aiLimiter, async (req, res) => {
   const { body } = req.body;
   if (!body || body.trim().length < 10) {
     return res.status(400).json({ error: 'Відповідь має бути не менше 10 символів' });
@@ -14,19 +15,27 @@ router.post('/questions/:id/answers', requireAuth, async (req, res) => {
   if (!q.rows[0]) return res.status(404).json({ error: 'Запитання не знайдено' });
 
   const result = await pool.query(
-    `INSERT INTO answers (body, question_id, author_id)
-     VALUES ($1, $2, $3) RETURNING *`,
+    `INSERT INTO answers (body, question_id, author_id, moderation_status)
+     VALUES ($1, $2, $3, 'pending') RETURNING *`,
     [body.trim(), req.params.id, req.userId]
   );
-  res.status(201).json(result.rows[0]);
+  const answer = result.rows[0];
+
+  const moderation = await moderateAndSave(req.userId, 'answer', answer.id, answer.body);
+
+  if (moderation.verdict === 'rejected') {
+    return res.status(422).json({ error: 'Відповідь не пройшла модерацію', reason: moderation.reason });
+  }
+
+  res.status(201).json({ ...answer, moderation_status: moderation.verdict, moderation });
 });
 
-router.put('/answers/:id', requireAuth, async (req, res) => {
+router.put('/answers/:id', requireAuth, aiLimiter, async (req, res) => {
   const found = await pool.query('SELECT * FROM answers WHERE id = $1', [req.params.id]);
-  const answer = found.rows[0];
+  const old = found.rows[0];
 
-  if (!answer) return res.status(404).json({ error: 'Відповідь не знайдено' });
-  if (answer.author_id !== req.userId) {
+  if (!old) return res.status(404).json({ error: 'Відповідь не знайдено' });
+  if (old.author_id !== req.userId) {
     return res.status(403).json({ error: 'Редагувати можна лише власні відповіді' });
   }
 
@@ -37,9 +46,17 @@ router.put('/answers/:id', requireAuth, async (req, res) => {
 
   const result = await pool.query(
     'UPDATE answers SET body = $1, updated_at = now() WHERE id = $2 RETURNING *',
-    [body.trim(), answer.id]
+    [body.trim(), old.id]
   );
-  res.json(result.rows[0]);
+  const answer = result.rows[0];
+
+  const moderation = await moderateAndSave(req.userId, 'answer', answer.id, answer.body);
+
+  if (moderation.verdict === 'rejected') {
+    return res.status(422).json({ error: 'Відповідь не пройшла модерацію', reason: moderation.reason });
+  }
+
+  res.json({ ...answer, moderation_status: moderation.verdict, moderation });
 });
 
 router.delete('/answers/:id', requireAuth, async (req, res) => {

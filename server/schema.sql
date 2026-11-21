@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS ai_requests;
 DROP TABLE IF EXISTS answers;
 DROP TABLE IF EXISTS questions;
 DROP TABLE IF EXISTS users;
@@ -46,3 +47,16 @@ INSERT INTO questions (title, body, discipline, author_id, tags, score) VALUES
 INSERT INTO answers (body, question_id, author_id) VALUES
   ('Рекурсія — це коли функція викликає сама себе. Головне — базовий випадок, де виклики зупиняються.', 1, 2),
   ('INNER JOIN повертає лише рядки зі збігом в обох таблицях, LEFT JOIN — усі рядки з лівої.', 2, 1);
+   ALTER TABLE questions ADD COLUMN moderation_status TEXT NOT NULL DEFAULT 'approved';
+ALTER TABLE answers ADD COLUMN moderation_status TEXT NOT NULL DEFAULT 'approved';
+
+CREATE TABLE ai_requests (
+  id SERIAL PRIMARY KEY,
+  user_id INT REFERENCES users(id) ON DELETE CASCADE,
+  target_type TEXT NOT NULL,
+  target_id INT NOT NULL,
+  verdict TEXT NOT NULL,
+  reason TEXT,
+  confidence REAL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
