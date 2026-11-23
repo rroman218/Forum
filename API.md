@@ -10,7 +10,7 @@
 cd server
 npm install
 psql studentqa -f schema.sql
-node --watch app.js
+npm run dev
 ```
 
 Потрібен файл `server/.env`:

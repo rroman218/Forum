@@ -1,12 +1,21 @@
-const rateLimit = require('express-rate-limit');
-const pool = require('../db');
+import { rateLimit } from 'express-rate-limit';
+import pool from '../db';
+
+export type Verdict = 'approved' | 'rejected' | 'needs_review';
+
+export interface ModerationResult {
+  verdict: Verdict;
+  reason: string;
+  confidence: number;
+}
+
+export const TABLES = { question: 'questions', answer: 'answers' } as const;
+export type TargetType = keyof typeof TABLES;
 
 const API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
 const DAILY_LIMIT = Number(process.env.AI_DAILY_LIMIT || 20);
-const VERDICTS = ['approved', 'rejected', 'needs_review'];
-// коли колега створить таблицю answers, додайте: answer: 'answers'
-const TABLES = { question: 'questions', answer: 'answers' };
+const VERDICTS: Verdict[] = ['approved', 'rejected', 'needs_review'];
 
 const SYSTEM_PROMPT = `Ти модератор студентської платформи запитань і відповідей.
 Оціни текст у блоці <content> за критеріями:
@@ -20,10 +29,19 @@ const SYSTEM_PROMPT = `Ти модератор студентської плат
 Поле verdict може бути лише: "approved", "rejected" або "needs_review".
 Поле confidence — число від 0 до 1.`;
 
-const fallback = (reason) => ({ verdict: 'needs_review', reason, confidence: 0 });
+const fallback = (reason: string): ModerationResult => ({ verdict: 'needs_review', reason, confidence: 0 });
 
-// дістає JSON із відповіді моделі (на випадок, якщо вона додала ```json ... ```)
-function parseJson(text) {
+interface ModelAnswer {
+  verdict?: string;
+  reason?: unknown;
+  confidence?: unknown;
+}
+
+interface GroqResponse {
+  choices?: { message?: { content?: string } }[];
+}
+
+function parseJson(text: unknown): ModelAnswer {
   const cleaned = String(text || '').replace(/```json|```/g, '').trim();
   const start = cleaned.indexOf('{');
   const end = cleaned.lastIndexOf('}');
@@ -31,7 +49,7 @@ function parseJson(text) {
   return JSON.parse(cleaned.slice(start, end + 1));
 }
 
-async function moderate(text, type) {
+export async function moderate(text: string, type: TargetType): Promise<ModerationResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
@@ -59,25 +77,26 @@ async function moderate(text, type) {
       throw new Error(`Groq ${response.status}: ${details.slice(0, 300)}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as GroqResponse;
     const result = parseJson(data.choices?.[0]?.message?.content);
-    if (!VERDICTS.includes(result.verdict)) throw new Error('Невалідний verdict');
+    if (!VERDICTS.includes(result.verdict as Verdict)) throw new Error('Невалідний verdict');
 
     return {
-      verdict: result.verdict,
+      verdict: result.verdict as Verdict,
       reason: String(result.reason || '').slice(0, 500),
       confidence: Math.min(1, Math.max(0, Number(result.confidence) || 0)),
     };
   } catch (err) {
-    console.error('AI-модерація не вдалася:', err.name === 'AbortError' ? 'timeout' : err.message);
+    const e = err as Error;
+    console.error('AI-модерація не вдалася:', e.name === 'AbortError' ? 'timeout' : e.message);
     return fallback('AI-модерація недоступна, потрібна ручна перевірка');
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function underDailyLimit(userId) {
-  const { rows } = await pool.query(
+async function underDailyLimit(userId: number): Promise<boolean> {
+  const { rows } = await pool.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM ai_requests
      WHERE user_id = $1 AND created_at > now() - interval '1 day'`,
     [userId]
@@ -85,9 +104,13 @@ async function underDailyLimit(userId) {
   return rows[0].n < DAILY_LIMIT;
 }
 
-async function moderateAndSave(userId, targetType, targetId, text) {
+export async function moderateAndSave(
+  userId: number,
+  targetType: TargetType,
+  targetId: number,
+  text: string
+): Promise<ModerationResult> {
   const table = TABLES[targetType];
-  if (!table) throw new Error('Невідомий тип: ' + targetType);
 
   const result = (await underDailyLimit(userId))
     ? await moderate(text, targetType)
@@ -102,12 +125,9 @@ async function moderateAndSave(userId, targetType, targetId, text) {
   return result;
 }
 
-// ліміт запитів на хвилину (ставиться після requireAuth, рахує по користувачу)
-const aiLimiter = rateLimit({
+export const aiLimiter = rateLimit({
   windowMs: 60_000,
   limit: 10,
   keyGenerator: (req) => String(req.userId),
   message: { error: 'Забагато запитів, спробуйте за хвилину' },
 });
-
-module.exports = { moderate, moderateAndSave, aiLimiter, TABLES };

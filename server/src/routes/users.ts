@@ -1,9 +1,9 @@
-const express = require('express');
-const pool = require('../db');
-const requireAuth = require('../middleware/auth');
-const { QUESTION_SELECT } = require('../utils/questions');
+import { Router } from 'express';
+import pool from '../db';
+import requireAuth from '../middleware/auth';
+import { QUESTION_SELECT } from '../utils/questions';
 
-const router = express.Router();
+const router = Router();
 
 router.get('/users/:id', async (req, res) => {
   const result = await pool.query(
@@ -16,7 +16,10 @@ router.get('/users/:id', async (req, res) => {
     [req.params.id]
   );
   const user = result.rows[0];
-  if (!user) return res.status(404).json({ error: 'Користувача не знайдено' });
+  if (!user) {
+    res.status(404).json({ error: 'Користувача не знайдено' });
+    return;
+  }
 
   const questions = await pool.query(
     QUESTION_SELECT + ' WHERE q.author_id = $1 ORDER BY q.created_at DESC',
@@ -29,7 +32,8 @@ router.get('/users/:id', async (req, res) => {
 router.put('/users/me', requireAuth, async (req, res) => {
   const { name } = req.body;
   if (!name || name.trim().length < 2) {
-    return res.status(400).json({ error: "Ім'я має бути не менше 2 символів" });
+    res.status(400).json({ error: "Ім'я має бути не менше 2 символів" });
+    return;
   }
 
   const result = await pool.query(
@@ -39,4 +43,4 @@ router.put('/users/me', requireAuth, async (req, res) => {
   res.json(result.rows[0]);
 });
 
-module.exports = router;
+export default router;
